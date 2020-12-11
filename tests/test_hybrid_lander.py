@@ -1,3 +1,5 @@
+import time
+
 from stadium.envs import HybridLander
 
 NUM_EPISODES = 5
