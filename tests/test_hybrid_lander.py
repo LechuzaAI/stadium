@@ -22,6 +22,7 @@ if __name__ == '__main__':
 
         print('Episode:\t{}\tTotal Reward:\t{}'.format(episode, total_reward))
         total_reward = 0.0
+        done = False
         env.reset()
 
     env.close()

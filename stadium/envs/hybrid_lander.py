@@ -16,6 +16,29 @@ def rgba(r, g, b, a):
     return float(r) / 255, float(g) / 255, float(b) / 255, float(a) / 255
 
 
+class ContactDetector(contactListener):
+    def __init__(self, world, rocket):
+        contactListener.__init__(self)
+        self.world = world
+        self.rocket = rocket
+
+    def BeginContact(self, contact):
+        if self.world.water in [contact.fixtureA.body, contact.fixtureB.body] \
+                or self.rocket.lander in [contact.fixtureA.body, contact.fixtureB.body] \
+                or self.world.containers[0] in [contact.fixtureA.body, contact.fixtureB.body] \
+                or self.world.containers[1] in [contact.fixtureA.body, contact.fixtureB.body]:
+            self.world.game_over = True
+        else:
+            for i in range(2):
+                if self.rocket.legs[i] in [contact.fixtureA.body, contact.fixtureB.body]:
+                    self.rocket.legs[i].ground_contact = True
+
+    def EndContact(self, contact):
+        for i in range(2):
+            if self.rocket.legs[i] in [contact.fixtureA.body, contact.fixtureB.body]:
+                self.rocket.legs[i].ground_contact = False
+
+
 class Rocket:
     # CONTROL
     gimbal = 0.0
@@ -293,9 +316,51 @@ class World:
         self._add_water()
         self._add_ship()
         self._add_rocket()
+        self.world.contactListener_keepref = ContactDetector(self, self.rocket)
+        self.world.contactListener = self.world.contactListener_keepref
 
     def state(self):
-        return []
+        pos = self.rocket.lander.position
+        vel_l = np.array(self.rocket.lander.linearVelocity) / self.START_SPEED
+        vel_a = self.rocket.lander.angularVelocity
+        x_distance = (pos.x - self.WIDTH / 2) / self.WIDTH
+        y_distance = (pos.y - self.SHIP_HEIGHT) / (self.HEIGHT - self.SHIP_HEIGHT)
+        distance = np.linalg.norm((3 * x_distance, y_distance))  # weight x position more
+        angle = (self.rocket.lander.angle / np.pi) % 2
+        speed = np.linalg.norm(vel_l)
+        landed = self.rocket.legs[0].ground_contact and self.rocket.legs[
+            1].ground_contact and speed < 0.1
+        groundcontact = self.rocket.legs[0].ground_contact or self.rocket.legs[1].ground_contact
+        # brokenleg = (self.rocket.legs[0].joint.angle < 0 or self.rocket.legs[1].joint.angle > -0) and groundcontact
+        brokenleg = False
+        outside = abs(
+            self.rocket.lander.position.x - self.WIDTH / 2) > self.WIDTH / 2 or self.rocket.lander.position.y > self.HEIGHT
+        if angle > 1:
+            angle -= 2
+        fuelcost = 0.1 * (0 * self.rocket.power + abs(self.rocket.force_direction)) / self.FPS
+        crashed = vel_a < 0.1 and speed < 0.1 and abs(angle) > 0.5
+        state = {'pos': pos,
+                 'distance': distance,
+                 'speed': speed,
+                 'vel_l': vel_l,
+                 'x': 2 * x_distance,
+                 'y': 2 * (y_distance - 0.5),
+                 'v_x': vel_l[0],
+                 'v_y': vel_l[1],
+                 'vel_a': vel_a,
+                 'angle': angle,
+                 'g_0': 1.0 if self.rocket.legs[0].ground_contact else 0.0,
+                 'g_1': 1.0 if self.rocket.legs[1].ground_contact else 0.0,
+                 'throttle': 2 * (self.rocket.throttle - 0.5),
+                 'gimbal': self.rocket.gimbal / self.rocket.GIMBAL_THRESHOLD,
+                 'landed': landed,
+                 'crashed': crashed,
+                 'brokenleg': brokenleg,
+                 'outside': outside,
+                 'fuelcost': fuelcost,
+                 'groundcontact': groundcontact
+                 }
+        return state
 
     def _render_sky(self, height, width):
         sky = rendering.FilledPolygon(((0, 0), (0, height), (width, height), (width, 0)))
@@ -365,7 +430,7 @@ class World:
                              self.HEIGHT,
                              self.initial_x,
                              self.initial_y)
-        # self.rocket.set_v0(self.env, self.INITIAL_RANDOM, self.START_SPEED, self.WIDTH)
+        self.rocket.set_v0(self.env, self.INITIAL_RANDOM, self.START_SPEED, self.WIDTH)
         self.drawlist.append(self.rocket.lander)
         self.drawlist.extend(self.rocket.legs)
 
@@ -388,7 +453,7 @@ class World:
 
 class HybridLander(gym.Env):
     FPS = 60
-    START_HEIGHT = 1000.0
+    START_HEIGHT = 300.0
     START_SPEED = 40
     INITIAL_RANDOM = 0.4
     SCALE = 0.35
@@ -426,6 +491,9 @@ class HybridLander(gym.Env):
         self.viewer = rendering.Viewer(self.VIEWPORT_W, self.VIEWPORT_H)
         self.viewer.set_bounds(0, self.W, 0, self.H)
         self.world = World(self, self.SCALE, self.W, self.H, self.START_SPEED, self.FPS, self.INITIAL_RANDOM)
+        self.game_over = False
+        self.prev_shaping = None
+        self.landed_ticks = 0
         self.reset()
 
     def seed(self, seed=None):
@@ -434,17 +502,27 @@ class HybridLander(gym.Env):
 
     def reset(self):
         self.world.reset()
+        self.game_over = False
+        self.prev_shaping = None
 
     def step(self, action):
         self.world.step(action)
 
         # should we normalize the state? not sure
-        state = self.world.state()
+        state_dict = self.world.state()
 
-        reward = self._compute_reward(state)
+        state = [state_dict['x'],
+                 state_dict['y'],
+                 state_dict['angle'],
+                 state_dict['g_0'],
+                 state_dict['g_1'],
+                 state_dict['throttle'],
+                 state_dict['gimbal']]
+
+        reward = self._compute_reward(state_dict)
         reward = np.clip(reward, -1.0, 1.0)
 
-        done = self._compute_done(state)
+        done = self._compute_done(state_dict)
 
         return np.array(state), reward, done, {}
 
@@ -462,7 +540,36 @@ class HybridLander(gym.Env):
             self.viewer = None
 
     def _compute_reward(self, state):
-        return 0.0
+        reward = -state['fuelcost']
+        shaping = -0.5 * (state['distance'] + state['speed'] + abs(state['angle']) ** 2)
+        shaping += 0.1 * (self.world.rocket.legs[0].ground_contact + self.world.rocket.legs[1].ground_contact)
+        if self.prev_shaping is not None:
+            reward += shaping - self.prev_shaping
+        self.prev_shaping = shaping
+
+        if state['landed']:
+            self.landed_ticks += 1
+        else:
+            self.landed_ticks = 0
+        if self.landed_ticks == self.FPS:
+            reward = 1.0
+            self.game_over = True
+
+        if self._compute_done(state):
+            reward += max(-1, 0 - 2 * (state['speed'] + state['distance'] + abs(state['angle']) + abs(state['vel_a'])))
+        else:
+            reward -= 0.25 / self.FPS
+
+        reward = np.clip(reward, -1, 1)
+
+        return reward
 
     def _compute_done(self, state):
-        return False
+        outside = state['outside']
+        brokenleg = state['brokenleg']
+        crashed = state['crashed']
+        if outside or brokenleg or crashed:
+            self.game_over = True
+        if self.game_over:
+            print(outside, brokenleg, crashed)
+        return self.game_over
