@@ -452,8 +452,8 @@ class World:
 
 
 class HybridLander(gym.Env):
-    FPS = 60
-    START_HEIGHT = 300.0
+    FPS = 30
+    START_HEIGHT = 500.0
     START_SPEED = 40
     INITIAL_RANDOM = 0.4
     SCALE = 0.35
@@ -514,6 +514,9 @@ class HybridLander(gym.Env):
         state = [state_dict['x'],
                  state_dict['y'],
                  state_dict['angle'],
+                 state_dict['vel_l'][0],
+                 state_dict['vel_l'][1],
+                 state_dict['vel_a'],
                  state_dict['g_0'],
                  state_dict['g_1'],
                  state_dict['throttle'],

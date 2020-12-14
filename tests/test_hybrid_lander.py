@@ -17,7 +17,6 @@ if __name__ == '__main__':
 
             state, reward, done, info = env.step(a)
             total_reward += reward
-
             env.render()
 
         print('Episode:\t{}\tTotal Reward:\t{}'.format(episode, total_reward))
